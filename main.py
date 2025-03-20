@@ -17,192 +17,164 @@ g4f.debug.logging = True
 if os.name == "nt":
   asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-app = Flask(__name__)
-CORS(app, origins="https://www.projet-voltaire.fr")
-client = Client()
+mon_app = Flask(__name__)
+CORS(mon_app, origins="https://www.projet-voltaire.fr")
+mon_client = Client()
 if os.path.exists("har_and_cookies"):
-  cookies_dir = os.path.join(os.path.dirname(__file__), "har_and_cookies")
-  set_cookies_dir(cookies_dir)
-  read_cookie_files(cookies_dir)
-r = sr.Recognizer()
+  dossier_cookies = os.path.join(os.path.dirname(__file__), "har_and_cookies")
+  set_cookies_dir(dossier_cookies)
+  read_cookie_files(dossier_cookies)
+reconnaissance = sr.Recognizer()
 
-@app.route("/")
-def home():
-  """This route redirect to the GitHub repository of the project."""
-  return redirect("https://github.com/JustYuuto/projet-voltaire-bot", code=301)
+@mon_app.errorhandler(HTTPException)
+def gerer_exception(erreur):
+    reponse = erreur.get_response()
+    reponse.data = json.dumps({
+      "status": erreur.code,
+      "message": erreur.name,
+      "description": erreur.description,
+    })
+    reponse.content_type = "application/json"
+    return reponse
 
-@app.route("/robots.txt")
-def robots():
-  """This route return the robots.txt file."""
-  response = Response("User-agent: *\nDisallow:")
-  response.content_type = "text/plain"
-  return response
+@mon_app.route("/robots.txt")
+def fichier_robots():
+  """Cette route renvoie le fichier robots.txt."""
+  reponse = Response("User-agent: *\nDisallow:")
+  reponse.content_type = "text/plain"
+  return reponse
 
-@app.route("/fix-sentence", methods=["POST"])
-def fix_sentence():
-  """
-  This route will fix a sentence, given in the body of the request. Hence, the only method allowed is POST.
-  In the body, one parameter need to be given: "sentence", which is the sentence to fix.
-  Here, we're using G4F to fix the sentence.
-  """
-  if not request.json or "sentence" not in request.json:
-    response = Response(json.dumps({
-      "status": 400,
-      "message": "Bad Request",
-      "description": "The request must be a JSON with a key \"sentence\"."
-    }), status=400, content_type="application/json")
-    raise HTTPException("Bad Request", response=response)
+@mon_app.route("/")
+def accueil():
+  """Cette route redirige vers le dépôt GitHub du projet."""
+  return redirect("https://github.com/Shyphem/Voltaire", code=301)
 
-  now = datetime.now()
-  sentence = request.json["sentence"]
-  prompt = ("Corrige les fautes dans cette phrase : \"{}\". Répond avec du JSON avec la clé \"word_to_click\" avec "
-            "comme valeur le mot non corrigé qui a été corrigé, ou null s'il n'y a pas de fautes.").format(sentence)
-  print("Prompt:", prompt)
-  response = client.chat.completions.create(
-    model="gpt-4",
-    response_format={"type": "json_object"},
-    messages=[{
-      "role": "user", "content": prompt
-    }],
-    max_tokens=500,
-  )
-  res_json = json.loads(response.choices[0].message.content)
-  print("Response:", res_json)
-  return Response(json.dumps({
-    "word_to_click": res_json["word_to_click"],
-    "time_taken": (datetime.now() - now).total_seconds(),
-  }), content_type="application/json")
-
-@app.route("/intensive-training", methods=["POST"])
-def intensive_training():
-  """
-  Perform intensive training using the Projet Voltaire Bot.
-
-  This function takes a JSON request with a list of sentences and a rule, and uses the Projet Voltaire Bot to generate a response in French. The response is a JSON object that contains the correctness of each sentence according to the given rule.
-
-  Returns:
-    A JSON response containing the correctness of each sentence.
-
-  Raises:
-    HTTPException: If the request is invalid or missing required fields.
-
-  thank you github copilot
-  """
-  if not request.json or "sentences" not in request.json or "rule" not in request.json:
-    response = Response(json.dumps({
-      "status": 400,
-      "message": "Bad Request",
-      "description": "The request must be a JSON with a key \"sentences\" and a key \"rule\"."
-    }), status=400, content_type="application/json")
-    raise HTTPException("Bad Request", response=response)
-
-  sentences = request.json["sentences"]
-  rule = request.json["rule"]
-  #prompt = "Suivant la règle : \"{}\" Les phrases :\n- {}\nSont elles correctes ? Répond avec du JSON avec un tableau d'objets qui prend comme clés \"sentence\" pour la phrase et la clé \"correct\" si cette dernière est correcte.".format(rule, "\n- ".join(sentences))
-  prompt = ("Les phrases :\n- {}\nSont elles correctes ? Répond avec un tableau JSON qui prend comme valeur un boolean"
-            " si cette dernière est correcte (sous le format [true, false, true]).".format("\n- ".join(sentences)))
-  print("Prompt:", prompt)
-  response = client.chat.completions.create(
-    model="gpt-4",
-    response_format={"type": "json_object"},
-    messages=[{
-      "role": "user", "content": prompt
-    }],
-    max_tokens=500,
-  )
-  res_json = json.loads(response.choices[0].message.content)
-  return Response(json.dumps(res_json), content_type="application/json")
-
-@app.route("/put-word", methods=["POST"])
-def put_word():
-  """
-  This word will add a missing word to the sentence given in the body of the request.
-  The user also needs to provide the audio URL for completing the sentence with the missing word.
-  It's using SpeechRecognition to get the missing word from the audio.
-  """
-  if not request.json or "sentence" not in request.json or "audio_url" not in request.json:
-    response = Response(json.dumps({
-      "status": 400,
-      "message": "Bad Request",
-      "description": "The request must be a JSON with a key \"sentence\" and a key \"audio_url\"."
-    }), status=400, content_type="application/json")
-    raise HTTPException("Bad Request", response=response)
-
-  sentence: str = request.json["sentence"]
-  if "{}" not in sentence:
-    response = Response(json.dumps({
-      "status": 400,
-      "message": "Bad Request",
-      "description": "The sentence must contain a \"{}\" to put the missing word."
-    }), status=400, content_type="application/json")
-    raise HTTPException("Bad Request", response=response)
-  audio_url: str = request.json["audio_url"]
-  print(sentence)
-  if "  " in sentence:
-    sentence = sentence.replace("  ", " {} ")
-
-  audio_file = requests.get(audio_url)
-  audio_filename = os.path.abspath("./audio{}.mp3".format(datetime.timestamp(datetime.now())))
-  audio_wav_filename = audio_filename[:-3] + 'wav'
-  with open(audio_filename, "wb") as f:
-    f.write(audio_file.content)
-  subprocess.run(['ffmpeg', '-i', audio_filename, audio_wav_filename])
-
-  with sr.AudioFile(audio_wav_filename) as source:
-    audio = r.record(source)
-
-  fixed_sentence_stt: str = r.recognize_google(audio, language="fr-FR")
-  try:
-    missing_word_index = sentence.split(" ").index("{}")
-  except ValueError:
-    missing_word_index = sentence.split(" ").index("{}.")
-  missing_word = fixed_sentence_stt.split()[missing_word_index]
-  fixed_sentence = sentence.replace("{}", missing_word)
-
-  os.remove(audio_filename)
-  os.remove(audio_wav_filename)
-
-  return Response(json.dumps({
-    "sentence": sentence,
-    "fixed_sentence": fixed_sentence,
-    "missing_word": missing_word,
-  }), content_type="application/json")
-
-@app.route("/nearest-word", methods=["POST"])
-def nearest_word():
+@mon_app.route("/nearest-word", methods=["POST"])
+def trouver_mot_proche():
   if not request.json or "word" not in request.json or "nearest_words" not in request.json:
-    response = Response(json.dumps({
+    reponse = Response(json.dumps({
       "status": 400,
       "message": "Bad Request",
-      "description": "The request must be a JSON with a key \"word\" and a key \"nearest_words\"."
+      "description": "La requête doit être un JSON avec une clé \"word\" et une clé \"nearest_words\"."
     }), status=400, content_type="application/json")
-    raise HTTPException("Bad Request", response=response)
+    raise HTTPException("Bad Request", response=reponse)
 
-  word: str = request.json["word"]
-  nearest_words: list = request.json["nearest_words"]
+  mot: str = request.json["word"]
+  mots_proches: list = request.json["nearest_words"]
 
-  prompt = "Quel est le mot le plus proche de \"{}\" parmi : {}. Répond en json avec une clé \"word\".".format(word, ", ".join(nearest_words))
-  nearest_word = json.loads(client.chat.completions.create(
+  question = "Quel est le mot le plus proche de \"{}\" parmi : {}. Répond en json avec une clé \"word\".".format(mot, ", ".join(mots_proches))
+  resultat_proche = json.loads(mon_client.chat.completions.create(
     model="gpt-4",
     response_format={ "type": "json_object" },
     messages=[{
-      "role": "user", "content": prompt
+      "role": "user", "content": question
     }],
     max_tokens=500,
   ).choices[0].message.content)
 
   return Response(json.dumps({
-    "word": nearest_word['word'],
+    "word": resultat_proche['word'],
   }), content_type="application/json")
 
-@app.errorhandler(HTTPException)
-def handle_exception(e):
-    """Return JSON instead of HTML for HTTP errors."""
-    response = e.get_response()
-    response.data = json.dumps({
-      "status": e.code,
-      "message": e.name,
-      "description": e.description,
-    })
-    response.content_type = "application/json"
-    return response
+@mon_app.route("/put-word", methods=["POST"])
+def completer_mot_manquant():
+  if not request.json or "sentence" not in request.json or "audio_url" not in request.json:
+    reponse = Response(json.dumps({
+      "status": 400,
+      "message": "Bad Request",
+      "description": "La requête doit être un JSON avec une clé \"sentence\" et une clé \"audio_url\"."
+    }), status=400, content_type="application/json")
+    raise HTTPException("Bad Request", response=reponse)
+
+  phrase: str = request.json["sentence"]
+  if "{}" not in phrase:
+    reponse = Response(json.dumps({
+      "status": 400,
+      "message": "Bad Request",
+      "description": "La phrase doit contenir un \"{}\" pour placer le mot manquant."
+    }), status=400, content_type="application/json")
+    raise HTTPException("Bad Request", response=reponse)
+  url_audio: str = request.json["audio_url"]
+  if "  " in phrase:
+    phrase = phrase.replace("  ", " {} ")
+
+  fichier_audio = requests.get(url_audio)
+  nom_fichier_audio = os.path.abspath("./audio{}.mp3".format(datetime.timestamp(datetime.now())))
+  nom_fichier_wav = nom_fichier_audio[:-3] + 'wav'
+  with open(nom_fichier_audio, "wb") as f:
+    f.write(fichier_audio.content)
+  subprocess.run(['ffmpeg', '-i', nom_fichier_audio, nom_fichier_wav])
+
+  with sr.AudioFile(nom_fichier_wav) as source:
+    audio = reconnaissance.record(source)
+
+  texte_reconnu: str = reconnaissance.recognize_google(audio, language="fr-FR")
+  try:
+    indice_mot_manquant = phrase.split(" ").index("{}")
+  except ValueError:
+    indice_mot_manquant = phrase.split(" ").index("{}.")
+  mot_manquant = texte_reconnu.split()[indice_mot_manquant]
+  phrase_complete = phrase.replace("{}", mot_manquant)
+
+  os.remove(nom_fichier_audio)
+  os.remove(nom_fichier_wav)
+
+  return Response(json.dumps({
+    "sentence": phrase,
+    "fixed_sentence": phrase_complete,
+    "missing_word": mot_manquant,
+  }), content_type="application/json")
+
+@mon_app.route("/intensive-training", methods=["POST"])
+def entrainement_intensif():
+  if not request.json or "sentences" not in request.json or "rule" not in request.json:
+    reponse = Response(json.dumps({
+      "status": 400,
+      "message": "Bad Request",
+      "description": "La requête doit être un JSON avec une clé \"sentences\" et une clé \"rule\"."
+    }), status=400, content_type="application/json")
+    raise HTTPException("Bad Request", response=reponse)
+
+  phrases = request.json["sentences"]
+  regle = request.json["rule"]
+  #question = "Suivant la règle : \"{}\" Les phrases :\n- {}\nSont elles correctes ? Répond avec du JSON avec un tableau d'objets qui prend comme clés \"sentence\" pour la phrase et la clé \"correct\" si cette dernière est correcte.".format(regle, "\n- ".join(phrases))
+  question = ("Les phrases :\n- {}\nSont elles correctes ? Répond avec un tableau JSON qui prend comme valeur un boolean"
+            " si cette dernière est correcte (sous le format [true, false, true]).".format("\n- ".join(phrases)))
+  reponse_api = mon_client.chat.completions.create(
+    model="gpt-4",
+    response_format={"type": "json_object"},
+    messages=[{
+      "role": "user", "content": question
+    }],
+    max_tokens=500,
+  )
+  donnees_json = json.loads(reponse_api.choices[0].message.content)
+  return Response(json.dumps(donnees_json), content_type="application/json")
+
+@mon_app.route("/fix-sentence", methods=["POST"])
+def corriger_phrase():
+  if not request.json or "sentence" not in request.json:
+    reponse = Response(json.dumps({
+      "status": 400,
+      "message": "Bad Request",
+      "description": "La requête doit être un JSON avec une clé \"sentence\"."
+    }), status=400, content_type="application/json")
+    raise HTTPException("Bad Request", response=reponse)
+
+  maintenant = datetime.now()
+  phrase = request.json["sentence"]
+  question = ("Corrige les fautes dans cette phrase : \"{}\". Répond avec du JSON avec la clé \"word_to_click\" avec "
+            "comme valeur le mot non corrigé qui a été corrigé, ou null s'il n'y a pas de fautes.").format(phrase)
+  reponse_api = mon_client.chat.completions.create(
+    model="gpt-4",
+    response_format={"type": "json_object"},
+    messages=[{
+      "role": "user", "content": question
+    }],
+    max_tokens=500,
+  )
+  donnees_json = json.loads(reponse_api.choices[0].message.content)
+  return Response(json.dumps({
+    "word_to_click": donnees_json["word_to_click"],
+    "time_taken": (datetime.now() - maintenant).total_seconds(),
+  }), content_type="application/json")

@@ -12,7 +12,7 @@ import os.path
 from g4f.cookies import set_cookies_dir, read_cookie_files
 import asyncio
 import g4f.debug
-g4f.debug.logging = True
+g4f.debug.logging = False
 
 if os.name == "nt":
   asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
